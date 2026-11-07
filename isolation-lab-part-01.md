@@ -1,6 +1,6 @@
 # Introduction
 
-This lab is divided into three parts. In each part, you will experiment with various aspects of software Isolation using Docker, a popular platform for packaging applications and their dependencies into lightweight, portable containers, each in its own isolated environment[^P11]. 
+This lab is divided into three parts. In each part, you will experiment with various aspects of software Isolation using Docker, a popular platform for packaging applications and their dependencies into lightweight, portable containers, each in its own isolated environment[^P11].
 
 Each of the different parts are intended to be roughly a practical (PL) class, but your mileage may vary; feel free to do it at your own pace, but don’t forget to be thorough on your observations and report. Each part has a setup section indicating what you will need to perform the lab.
 
@@ -41,7 +41,6 @@ Notes:
 - Expect questions bound to your own tag/host (the "Answer this" prompts in the artifact table) and possibly a request to reproduce a step live.
 - Because each lab requires at least 9.5/20, a low discussion factor can drop a member below the pass threshold for that lab.
 
-
 ## Submission integrity & anti-fabrication
 
 Each team is assigned its **own** Docker image tag in Moodle (e.g. `isepdei/insecurelabs01:team07`), which bakes secrets unique to your team. Your report must therefore be backed by evidence produced *from your own assigned tag and machine*, not by a plausible-sounding narrative. Three rules apply:
@@ -72,7 +71,6 @@ The required artifact and the data-bound question for the artifact-bearing quest
 | **Q12/Q14** | Your `capsh --print` output and `grep Cap /proc/1/status` dump, captured on your machine | Decode your `CapEff`: which capabilities are present, and how does the default set (Q12) differ from the privileged set (Q14)? |
 | **Q15** | Your `fdisk -l`/`lsblk` output, the `mount` command transcript, and the exploit video | Which host device did you mount, what is its size, and what file did you read/create on the host to prove the compromise? |
 
-
 > **AI-usage disclosure (this document).** Parts of this lab description, including the per-team anti-fabrication scaffolding and some wording, were drafted and reviewed with the help of AI assistants. All content was reviewed and validated by the teaching team, who remain responsible for it.
 
 # Part 1: Keeping Secrets OUT of Docker Images
@@ -95,7 +93,7 @@ RUN yarn install  --production
 CMD  ["node", "src/index.js"]  EXPOSE 3000  
 ```
 
-The application uses some credentials at runtime and creates an encrypted secure storage for them. However, during “yarn install”, it needs to have the following .env file (don’t question these design decisions, Tom’s a [super-genious](https://thedailywtf.com/articles/the-inner-json-effect?ref=gorillasun.de)!): 
+The application uses some credentials at runtime and creates an encrypted secure storage for them. However, during “yarn install”, it needs to have the following .env file (don’t question these design decisions, Tom’s a [super-genious](https://thedailywtf.com/articles/the-inner-json-effect?ref=gorillasun.de)!):
 
 ```
 API_KEY=<some  secret api key>  
@@ -115,13 +113,17 @@ This is how the folder of the application looks like when Scott builds the conta
 
 The image is publicly available in Docker Hub:
 
-- https://hub.docker.com/r/isepdei/insecurelabs01
+- <https://hub.docker.com/r/isepdei/insecurelabs01>
 
 **Question** **1.** **What is the issue here?**
 
+**Answer:** The Dockerfile’s COPY . . copies the entire application into /app in the image which includes the .env file. Since the image is published publicly, its API key and username are exposed to anyone who can pull it, like our team which then can be used to access unauthorized endpoints.
+
 **Question** **2.** **Can you recover the actual secrets from the image? Describe how you would do this and include a screenshot of the recovered secrets.**
 
-## Fixed it!
+**Answer:** Yes, very easily. Considering the entire filesystem was simply copied onto the image all we needed to do was create a container and export the filesystem, it took less than a minute.
+
+## Fixed it
 
 Tom, the senior engineer, quickly spotted Scott’s mistake: “Let me fix that for you!”. Here is the Dockerfile Tom wrote:
 
@@ -136,20 +138,44 @@ CMD  ["node", "src/index.js"]  EXPOSE 3000
 
 Scott created a new API key and invalidated the old one. The resulting image is publicly available in Docker Hub:
 
-- https://hub.docker.com/r/isepdei/insecurelabs02
+- <https://hub.docker.com/r/isepdei/insecurelabs02>
 
 **Question** **3.** **What do you think of Tom’s fix?**
 
+**Answer:**  It's not a very good fix as tools like dive and just using the docker image save command can see the docker layer history. Docker image files are built on series of layers consisting of the operations performed when assembling the image so it won't be difficult to recover the .env file.
+
 **Question** **4.** **Is it possible to recover the new API key now[^P13] ? Provide detailed instructions and include a screenshot of the recovered API key.**
 
+**Answer:**  The API Key is '1298f145-a76e-482d-adc4-75b8abc36829'. It can be extracted even after it was removed by analyzing the layers, first we used docker image save which exports the image contents while preserving the layers metadata, after this we used dive to check which hash was correspondent to the COPY ... command, after that it was just a matter of hashing the gzip contents of each layer and just checking which were equal to the hash from dive, since there weren't that many layers we just did this manually.
 
 **Question** **5.** **So, how would you go about doing Scott’s job? Would you do something different? Explain in detail.**
 
+**Answer:**  I would change Scott's Dockerfile so the secret never reaches a layer of the image that gets published. The main mistake was COPY . ., which copied .env into the image. Tom's RUN rm .env didn't fix this, because the file stays in the earlier layer and can be recovered by saving the image and reading that layer (Q4). The compromised API key should also be revoked and replaced, and any image already pushed with it should be removed or replaced.
+
+Since yarn install needs the manifest files (which includes .env), we use a multi-stage build. The builder stage gets the manifest files and does the install. The final stage starts fresh and copies in only the results of the build, so the builder's layers are never packaged into the final image:
+
+```
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package.json yarn.lock .env ./
+RUN yarn install --production
+
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=builder /app/node_modules ./node_modules
+COPY src ./src
+CMD ["node", "src/index.js"]
+EXPOSE 3000
+```
+
+The final stage copies specific files instead of COPY . ., so nothing extra can slip in, and .env never appears in its layers. We could would also add .env, keys and credentials to .dockerignore, so no step can copy them in by accident. This only works because a docker image file is defined by its last stage only. Each FROM starts a completely new filesystem, and the final image's layers come only from the final stage's instructions, in this case 'builder' and when the process gets to this stage the .env file already doesn't exist.
+
+There is a disclaimer though, we don't know if there are vulnerabilities regarding the actual yarn install process that we could not be aware of, this was mostly a demonstration on how to not let secrets through docker's generated metadata.
+
 ------
 
-[^P11]: https://docs.docker.com/engine/security/
+[^P11]: <https://docs.docker.com/engine/security/>
 
-[^P12]: Markus Dahlmanns, Constantin Sander, Robin Decker, and Klaus Wehrle. 2023. Secrets Revealed in Container Images: An Internet-wide Study on Occurrence and Impact. In Proceedings of the 2023 ACM Asia Conference on Computer and Communications Security (ASIA CCS '23). Association for Computing Machinery, New York, NY, USA, 797–811. https://doi.org/10.1145/3579856.3590329. **Available in Moodle**.
+[^P12]: Markus Dahlmanns, Constantin Sander, Robin Decker, and Klaus Wehrle. 2023. Secrets Revealed in Container Images: An Internet-wide Study on Occurrence and Impact. In Proceedings of the 2023 ACM Asia Conference on Computer and Communications Security (ASIA CCS '23). Association for Computing Machinery, New York, NY, USA, 797–811. <https://doi.org/10.1145/3579856.3590329>. **Available in Moodle**.
 
-[^P13]: Many sources on the Web to help you, but beware that very few are completely accurate; you will have to get it right by combining multiple sources. Here is a hint: you might want to take a **Dive**: https://github.com/wagoodman/dive **and** save the Docker image to a .tar file: https://docs.docker.com/reference/cli/docker/image/save/
-
+[^P13]: Many sources on the Web to help you, but beware that very few are completely accurate; you will have to get it right by combining multiple sources. Here is a hint: you might want to take a **Dive**: <https://github.com/wagoodman/dive> **and** save the Docker image to a .tar file: <https://docs.docker.com/reference/cli/docker/image/save/>
