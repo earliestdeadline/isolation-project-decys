@@ -184,6 +184,34 @@ docker exec captest sh -c 'capsh --decode=00000000a80425fb'
 
 **Question** **12.** **What are the inheritable, permitted and effective capabilities of a process running in the container (look at the `proc` filesystem output)? Compare to the output of** **`capsh –-print`.**
 
+**Answer**: For the container’s main process (PID 1), /proc/1/status shows:
+
+```sh
+CapInh: 0000000000000000
+CapPrm: 00000000a80425fb
+CapEff: 00000000a80425fb
+CapBnd: 00000000a80425fb
+CapAmb: 0000000000000000
+```
+
+The inheritable set is empty, while the permitted and effective sets are identical (a80425fb), as is the bounding set. Decoding the value with capsh --decode=00000000a80425fb gives 14 capabilities:
+
+- cap_chown
+- cap_dac_override
+- cap_fowner
+- cap_fsetid
+- cap_kill
+- cap_setgid
+- cap_setuid
+- cap_setpcap
+- cap_net_bind_service
+- cap_net_raw
+- cap_sys_chroot
+- cap_mknod
+- cap_audit_write and cap_setfcap
+
+capsh --print shows the same data already decoded: Current: ...=ep lists those 14 as effective and permitted (no i, so inheritable is empty), the Bounding set lists the same 14, and the Ambient set is empty. The Current IAB line lists what is missing (ex: cap_sys_admin, cap_net_admin, cap_sys_module). So /proc gives raw bitmasks and capsh gives names, but they agree. The process runs as uid=0 yet holds only a subset of root’s capabilities, which is Docker’s default hardening.
+
 Try to use the container to perform a **`ping`**:
 
 ```
@@ -198,6 +226,34 @@ docker run --name captest --cap-drop all -d -p 8000:80 isepdei/capabilities01
 ```
 
 **Question** **13.** **Do you notice any issue when you try to do a `ping` again? Explain why and how can you fix it while still running with** **`--cap-drop` all.**
+
+**Answer:** Yes. After --cap-drop all, ping fails immediately:
+
+```sh
+sh: 1: ping: Operation not permitted
+```
+
+/proc/1/status shows all capability sets as 0000000000000000, so the container has no capabilities, not even cap_net_raw.
+
+Ping is not Set UID, it relies on the file capability cap_net_raw=ep. When the kernel executes a file with capabilities, what it can grant is limited by the process’s bounding set. With --cap-drop all that set is empty, so the kernel cannot give ping the capability it requires and refuses. That is why the error comes from sh: ping never starts. Being uid=0 doesn’t help, because root’s power inside a container comes from its capabilities.
+
+To fix this we can add back only the capability it needs:
+
+```sh
+docker run --name captest --cap-drop all --cap-add net_raw -d -p 8000:80 isepdei/capabilities01
+```
+
+Ping now works and CapPrm, CapEff and CapBnd are all 0000000000002000, which is cap_net_raw only.
+
+```sh
+CapInh: 0000000000000000
+CapPrm: 0000000000002000
+CapEff: 0000000000002000
+CapBnd: 0000000000002000
+CapAmb: 0000000000000000
+```
+
+The container holds one capability instead of Docker’s default 14, following least privilege.
 
 ------
 
