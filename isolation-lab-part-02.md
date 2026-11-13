@@ -59,6 +59,8 @@ The failure is the `socket()`/`EPERM` at start-up, not a networking problem. The
 
 **Question** **7.** **Can you make ping work again without adding any capability, and without running with** **sudo?** **Provide a video showing your solution before and after.**
 
+**Video:** [question-07-video](/videos/question-07-video.mp4)
+
 **Answer.** Yes. Modern `iputils` `ping` no longer strictly needs a raw socket: if it cannot open `SOCK_RAW` it falls back to an **ICMP datagram socket** (`socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)`). The kernel decides which users (by GID) may open such a socket through the sysctl **`net.ipv4.ping_group_range`**. By default this range is often empty (`1 0`, i.e. no group allowed), so the fallback also fails. We simply widen the allowed group range so our user's GID is included:
 
 ```
@@ -81,31 +83,60 @@ $ ping -c1 www.dei.isep.ipp.pt
 
 This works because the privilege was moved from a *per-binary file capability* to a *kernel policy* (`ping_group_range`): the kernel now permits members of the listed groups to create ICMP sockets directly, so no raw-socket capability is required. To make it persist across reboots, add `net.ipv4.ping_group_range = 0 2147483647` to `/etc/sysctl.conf` (or a file in `/etc/sysctl.d/`). The video should show: (a) `ping` failing after Q6's removal, (b) the `sysctl -w` change, and (c) `ping` succeeding as the normal user with `getcap` showing no capability.
 
-**Question** **8.** **Can you make** **passwd work without being a Set UID program? Detail how and why the solution works, and provide a video demonstrating passwd functioning without being a Set UID program.**
+**Question 8. Can you make `passwd` work without being a Set-UID program? Detail how and why the solution works, and provide a video demonstrating `passwd` functioning without being a Set-UID program.**
 
-**Answer.** Yes. The only reason `passwd` runs Set UID root is so it can write to root-owned files (`/etc/shadow`, `/etc/passwd`) that a normal user is not permitted to modify. We can replace the Set UID bit with the **specific capability that bypasses the file-permission (DAC) check**, `cap_dac_override`:
+**Video:** [question-08-video](/videos/question-08-video.mp4)
+
+**Answer.** Yes — but doing it correctly reveals that `passwd` needs *more* than "permission to write a root-owned file," which makes this a good illustration of how hard true least-privilege actually is.
+
+The reason `passwd` is Set-UID root is to modify root-owned files (`/etc/shadow`, `/etc/passwd`) that a normal user cannot touch. The natural first attempt is to drop the Set-UID bit and grant only the capability that bypasses the discretionary-access-control (DAC) permission checks, `cap_dac_override`:
 
 ```
-# before: note the 's' and that it is owned by root
 $ ls -l /usr/bin/passwd
 -rwsr-xr-x 1 root root ... /usr/bin/passwd
 
-# remove the Set UID bit
-# chmod u-s /usr/bin/passwd
+# remove the Set-UID bit
+$ chmod u-s /usr/bin/passwd
 $ ls -l /usr/bin/passwd
--rwxr-xr-x 1 root root ... /usr/bin/passwd      # no more 's'
+-rwxr-xr-x 1 root root ... /usr/bin/passwd
 
-# grant only the capability it actually needs
-# setcap cap_dac_override+ep /usr/bin/passwd
+$ setcap cap_dac_override+ep /usr/bin/passwd
 $ getcap /usr/bin/passwd
 /usr/bin/passwd cap_dac_override=ep
 ```
 
-Now a normal user can run `passwd` and change their own password even though the binary is **not** Set UID.
+**This single capability is not enough.** Running `passwd` as a normal user now fails:
 
-**Why it works.** `CAP_DAC_OVERRIDE` makes the kernel skip the discretionary-access-control (owner/group/other read-write-execute) checks on files. `passwd`'s hard requirement was precisely to write `/etc/shadow` despite not owning it; granting that one capability satisfies that requirement without giving the process the full root *identity* that Set UID does. It is the principle of **least privilege**: instead of "become root" we grant "ignore file permission bits," which is the narrower privilege actually needed.
+```
+$ passwd
+Changing password for rita.
+Current password:
+New password:
+Retype new password:
+passwd: Authentication token manipulation error
+passwd: password unchanged
+```
 
-**Caveat to mention in the report.** The process still runs with the caller's UID (not root), so operations that genuinely depend on *being UID 0* (not just on file permissions) may behave differently; and `cap_dac_override` is itself a powerful capability (it can read/write *any* file on the system), so this is a demonstration of the technique, not necessarily a hardening improvement over Set UID. The video should show `ls -l` with no `s` bit, `getcap` showing the capability, and a successful password change as a normal user.
+**Why the naive version fails.** `passwd` does not edit `/etc/shadow` in place. Through PAM's `pam_unix` module it performs an **atomic replace**: it creates a temporary file, copies every entry across (rewriting the user's hash), **restores the original owner, group and mode** on the new file (`root:shadow`, `0640`), then `rename()`s it over `/etc/shadow`. That ownership/mode restoration needs privileges `cap_dac_override` does **not** provide:
+
+- changing a file's owner **to root** requires `CAP_CHOWN`;
+- changing the mode/attributes of a file you **do not own** requires `CAP_FOWNER`.
+
+`cap_dac_override` only skips the read/write/execute permission-bit checks (it lets the process *open* `/etc/shadow`); it grants none of the above. So PAM aborts and reports the generic *"Authentication token manipulation error."*
+
+**The working solution** is to grant the full set of capabilities the operation genuinely uses:
+
+```
+# setcap cap_dac_override,cap_chown,cap_fowner+ep /usr/bin/passwd
+$ getcap /usr/bin/passwd
+/usr/bin/passwd cap_dac_override,cap_chown,cap_fowner=ep
+```
+
+With these three capabilities the (non-Set-UID) binary can rewrite `/etc/shadow` *and* restore its ownership and mode, so a normal user can change their own password.
+
+**Why the solution works (and what it teaches).** Replacing Set-UID with capabilities works because Set-UID hands the process the entire root *identity*, whereas capabilities let us grant only specific privileged *operations*. The lesson is that enumerating those operations precisely is non-trivial: changing a password is not one privilege but several, bypass DAC to open the file (`cap_dac_override`), change its owner (`cap_chown`), fix its mode (`cap_fowner`), plus reliance on a separately-privileged helper for the password check. This is exactly why the shipped binary simply takes full root via Set-UID: it is the blunt but simple way to cover every one of those sub-privileges at once. The capability version is more faithful to the principle of **least privilege**, at the cost of having to know precisely what the program does.
+
+**What the video shows:** `whoami` (an unprivileged user), `ls -l /usr/bin/passwd` with **no `s` bit**, `getcap /usr/bin/passwd` showing `cap_dac_override,cap_chown,cap_fowner=ep`, and finally a **successful** `passwd` run changing the user's own password.
 
 **Question** **9.** **Discuss why do you think that, by default,** **passwd is a Set UID program and** **ping is not?**
 
