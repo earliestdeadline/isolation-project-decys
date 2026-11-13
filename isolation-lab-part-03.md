@@ -50,6 +50,19 @@ Taken together, root inside the container is effectively root on the host, and t
 
 **Question** **15.** **Can you describe what can go wrong? Provide a detailed exploit of the issue, showcasing some compromise of the container’s host (for some reason, Scott installed `fdisk` on the container). Include a video of the exploit.**
 
+**Answer:** As stated on the previous answer, the container, not only doesn't have the seccomp profile and AppArmor/SELinux confinement, which gives it access to the host's devices, it also has the same capabilities as root on **the host**.
+
+Since the host's block devices are exposed unfiltered inside the container, `fdisk -l` reveals them directly, including `/dev/sdd`, the host's main disk.
+With the `cap_sys_admin` capability, the container can mount it without restriction:
+
+```bash
+mkdir -p /mnt/filesystem
+mount /dev/sdd /mnt/filesystem
+```
+
+At this point, the container has the host's root filesystem mounted with **full read/write access as root**, with no MAC policy standing in the way. So, any file on the host can be read, modified or deleted from inside what *should have been* an isolated container.
+The following video demonstrates this exploit by writing directly into the host filesystem: [Exploit Video](question-15-video.mp4)
+
 ## Advanced Escapes
 
 There are a number of container escapes that rely on the availability of certain capabilities[^P31]. Have a look at the article. 
@@ -58,7 +71,32 @@ There are a number of container escapes that rely on the availability of certain
 
 **Question** **16.** **Can you replicate any of these escapes? Remember that some might not work anylonger. You should test them and explain how you proceeded to make it work. Provide a video demonstrating the exploit (demo).** (this question is for extra points)
 
+**Answer:** Unlike the privileged container escape in Q15, this escape requires *no Linux capabilities*. The misconfiguration here is the **mounting of the host's Docker socket into the container:**
+
+```bash
+docker run -it --rm -v /var/run/docker.sock:/var/run/docker.sock ubuntu bash
+```
+
+The docker daemon runs as root on the host and listens on `/var/run/docker.sock/`. When this socket is mounted inside a container, any process inside can communicate with the daemon directly as if it were the host itself. From inside the container, the socket is used to instruct the daemon to spawn a new privileged container with the host's root filesystem mounted:
+
+```bash
+docker -H unix:///var/run/docker.sock run -v /:/host -it ubuntu chroot /host
+```
+
+Resulting in a shell chrooted to the host's file system, launched outside of any container isolation boundary. This misconfiguration isn't present in Scott's container, however, it is a distinct and more dangerous class of escape since it can effect containers that appear hardened.
+The following video demonstrates this exploit by writing directly into the host filesystem through a nested container: [Exploit Video](question-16-video.mp4)
+
 **Question** **17.** **Finally, what are some good practices regarding Docker security?**
+
+**Answer:** Good Docker security practice covers four areas: the image, the container runtime, the host and the running service.
+
+**In regards to image security:** as demonstrated in Q1-Q5, secrets must never enter the image build context. By using multi-stage builds, credentials used during build steps never appear in a published layer. `.env` and credential files should be added to `.dockerignore` and, images that had a secret in any layer, should be treated as permanently compromised. Use minimal base images and regularly scan images for known CVEs.
+
+**In regards to container runtime:** never use --privileged, as shown in Q14 and Q15, it removes every isolation boundary. Instead, start from `--cap-drop=ALL` and add back only the specific capability the application needs, as shown in Q13. Keep the default seccomp profile and AppArmor/SELinux confinement active to provide a secondary enforcement layer, even when a capability is present.
+
+**In regards to the Host:** never mount `/var/run/docker.sock` into a container, as shown in Q16. Avoid mounting sensitive host paths as volumes. Keep the docker daemon containerd and runc updated as several of the CVEs in the references article are **runc vulnerabilities** that are exploitable on outdated hosts.
+
+**In regards to service:** always apply the principle of least privilege, at every level. Only expose the ports the service actually needs, use read-only filesystems and use Docker's user namespace remapping to ensure that even a container root maps to an unprivileged host UID. Logging and anomaly monitoring should also be enabled so unexpected syscalls or mount operations are detectable.
 
 ------
 
