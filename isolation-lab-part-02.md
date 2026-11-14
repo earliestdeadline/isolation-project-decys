@@ -239,7 +239,8 @@ The inheritable set is empty, while the permitted and effective sets are identic
 - cap_net_raw
 - cap_sys_chroot
 - cap_mknod
-- cap_audit_write and cap_setfcap
+- cap_audit_write
+- cap_setfcap
 
 capsh --print shows the same data already decoded: Current: ...=ep lists those 14 as effective and permitted (no i, so inheritable is empty), the Bounding set lists the same 14, and the Ambient set is empty. The Current IAB line lists what is missing (ex: cap_sys_admin, cap_net_admin, cap_sys_module). So /proc gives raw bitmasks and capsh gives names, but they agree. The process runs as uid=0 yet holds only a subset of root’s capabilities, which is Docker’s default hardening.
 

@@ -15,7 +15,7 @@ For this part of the Lab, you will need a computer with Docker installed.
 
 Oh oh, they asked Scott to setup the container on one of SecureLabs’ servers. He was having some issues bringing up the container and ended up with doing this:
 
-```
+```sh
 docker run -d --privileged -p 80:80 isepdei/insecurelabs03
 ```
 
@@ -31,22 +31,19 @@ CapBnd: 000001ffffffffff
 CapAmb: 0000000000000000
 ```
 
-The permitted, effective and bounding sets are all 000001ffffffffff, which means all 41 capabilities.
-
-Decoding it with capsh lists all 41, including the ones Docker normally withholds:
+The permitted, effective and bounding sets are all 000001ffffffffff. Decoding it with capsh lists 41 capabilities, some of the most important being:
 
 - cap_sys_admin, the near-root catch-all (mount, namespaces and more)
 - cap_sys_module, to load kernel modules
 - cap_sys_rawio, for raw access to block devices and I/O ports
 - cap_sys_ptrace, to trace and attach to any process
 - cap_net_admin, to configure network interfaces, routes and firewall rules
-- cap_sys_boot, cap_sys_time, cap_mac_admin, cap_mac_override, cap_bpf, cap_perfmon and others
 
-So the container has the same capabilities as root on the host.
+Along with cap_sys_boot, cap_sys_time, cap_mac_admin, cap_mac_override, cap_bpf, cap_perfmon and others. This effectively means the container has the same capabilities as root on the host.
 
---privileged also does more than grant capabilities, as it disables the default seccomp profile and AppArmor/SELinux confinement, gives the container access to the host’s devices (e.g. /dev/sda), which is why fdisk matters in Q15, and makes /sys and /proc writable.
+--privileged also does more than grant capabilities, as it disables the default seccomp profile and AppArmor/SELinux confinement, gives the container access to the host’s devices.
 
-Taken together, root inside the container is effectively root on the host, and the isolation Docker normally provides is largely gone.
+**Q12/Q14 Answer:** The default Docker set is scoped to ordinary application needs, which wouldn't normally allow a process reach outside the container. The privileged set adds every capability that controls the kernel and host-level resources directly, which effectively remove container isolation.
 
 **Question** **15.** **Can you describe what can go wrong? Provide a detailed exploit of the issue, showcasing some compromise of the container’s host (for some reason, Scott installed `fdisk` on the container). Include a video of the exploit.**
 
