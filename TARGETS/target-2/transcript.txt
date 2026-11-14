@@ -1,0 +1,5 @@
+Script started on 2026-11-14 17:11:39+00:00 [COMMAND="docker run --rm --entrypoint cat isepdei/insecurelabs01:team9 /app/.env | tee TARGETS/target-2/.env" TERM="xterm-256color" TTY="/dev/pts/2" COLUMNS="96" LINES="9"]
+API_KEY=0bae696e-39d2-407e-b0a4-538b3b808185
+USER=user01_team9
+
+Script done on 2026-11-14 17:11:40+00:00 [COMMAND_EXIT_CODE="0"]
