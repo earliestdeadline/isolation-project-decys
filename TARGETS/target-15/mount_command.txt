@@ -1,0 +1,4 @@
+# mkdir -p /mnt/filesystem
+# mount /dev/sdd /mnt/filesystem
+# ls /mnt/filesystem
+bin boot dev etc home init lib lib32 lib64 libx32 last+found media mnt opt proc root run sbin snap srv sys tmp usr var wslFEDMPJ wslGMAPP wslHaGOdP wslKpndP wslLmBecP
