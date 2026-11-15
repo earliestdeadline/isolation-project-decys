@@ -58,11 +58,11 @@ mount /dev/sdd /mnt/filesystem
 ```
 
 At this point, the container has the host's root filesystem mounted with **full read/write access as root**, with no MAC policy standing in the way. So, any file on the host can be read, modified or deleted from inside what *should have been* an isolated container.
-The following video demonstrates this exploit by writing directly into the host filesystem: [Exploit Video](question-15-video.mp4)
+The following video demonstrates this exploit by writing directly into the host filesystem: [Exploit Video](/videos/question-15-video.mp4)
 
 ## Advanced Escapes
 
-There are a number of container escapes that rely on the availability of certain capabilities[^P31]. Have a look at the article. 
+There are a number of container escapes that rely on the availability of certain capabilities[^P31]. Have a look at the article.
 
 > Note that some of these exploits might depend on other system configuration, Docker versions, and other layers of isolation Docker relies on (e.g. namespaces, capabilities, seccomp,...).
 
@@ -81,7 +81,7 @@ docker -H unix:///var/run/docker.sock run -v /:/host -it ubuntu chroot /host
 ```
 
 Resulting in a shell chrooted to the host's file system, launched outside of any container isolation boundary. This misconfiguration isn't present in Scott's container, however, it is a distinct and more dangerous class of escape since it can effect containers that appear hardened.
-The following video demonstrates this exploit by writing directly into the host filesystem through a nested container: [Exploit Video](question-16-video.mp4)
+The following video demonstrates this exploit by writing directly into the host filesystem through a nested container: [Exploit Video](/videos/question-16-video.mp4)
 
 **Question** **17.** **Finally, what are some good practices regarding Docker security?**
 
