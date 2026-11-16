@@ -81,7 +81,7 @@ $ ping -c1 www.dei.isep.ipp.pt
 64 bytes from ... icmp_seq=1 ttl=.. time=.. ms
 ```
 
-This works because the privilege was moved from a *per-binary file capability* to a *kernel policy* (`ping_group_range`): the kernel now permits members of the listed groups to create ICMP sockets directly, so no raw-socket capability is required. To make it persist across reboots, add `net.ipv4.ping_group_range = 0 2147483647` to `/etc/sysctl.conf` (or a file in `/etc/sysctl.d/`). The video should show: (a) `ping` failing after Q6's removal, (b) the `sysctl -w` change, and (c) `ping` succeeding as the normal user with `getcap` showing no capability.
+This works because the privilege was moved from a *per-binary file capability* to a *kernel policy* (`ping_group_range`): the kernel now permits members of the listed groups to create ICMP sockets directly, so no raw-socket capability is required. To make it persist across reboots,  `net.ipv4.ping_group_range = 0 2147483647` should be added to `/etc/sysctl.conf` (or a file in `/etc/sysctl.d/`).
 
 **Question 8. Can you make `passwd` work without being a Set-UID program? Detail how and why the solution works, and provide a video demonstrating `passwd` functioning without being a Set-UID program.**
 
@@ -134,9 +134,7 @@ $ getcap /usr/bin/passwd
 
 With these three capabilities the (non-Set-UID) binary can rewrite `/etc/shadow` *and* restore its ownership and mode, so a normal user can change their own password.
 
-**Why the solution works:** Replacing Set-UID with capabilities works because Set-UID hands the process the entire root *identity*, whereas capabilities let us grant only specific privileged *operations*. The lesson is that enumerating those operations precisely is non-trivial: changing a password is not one privilege but several, bypass DAC to open the file (`cap_dac_override`), change its owner (`cap_chown`), fix its mode (`cap_fowner`), plus reliance on a separately-privileged helper for the password check. This is exactly why the shipped binary simply takes full root via Set-UID: it is the blunt but simple way to cover every one of those sub-privileges at once. The capability version is more faithful to the principle of **least privilege**, at the cost of having to know precisely what the program does.
-
-**What the video shows:** `whoami` (an unprivileged user), `ls -l /usr/bin/passwd` with **no `s` bit**, `getcap /usr/bin/passwd` showing `cap_dac_override,cap_chown,cap_fowner=ep`, and finally a **successful** `passwd` run changing the user's own password.
+**Why the solution works:** Replacing Set-UID with capabilities works because Set-UID hands the process the entire root *identity*, whereas capabilities let us grant only specific privileged *operations*. The lesson is that enumerating those operations precisely is non-trivial: changing a password is not one privilege but several, bypass DAC to open the file (`cap_dac_override`), change its owner (`cap_chown`), fix its mode (`cap_fowner`). This is exactly why the shipped binary simply takes full root via Set-UID: it is the blunt but simple way to cover every one of those sub-privileges at once. The capability version is more faithful to the principle of **least privilege**, at the cost of having to know precisely what the program does.
 
 **Question** **9.** **Discuss why do you think that, by default,** **passwd is a Set UID program and** **ping is not?**
 
@@ -152,13 +150,13 @@ In short: `ping` keeps Set UID *off* because a single minimal capability covers 
 
 **Question** **10.** **Can you get familiar with other capabilities? On you report explain ten more capabilities of your choice.**
 
-**Answer.** Ten capabilities (other than `cap_net_raw`) from `capabilities(7)`:
+**Answer.** Ten other capabilities according to linux manual page:
 
 1. **`CAP_CHOWN`** — Change the ownership (UID/GID) of files arbitrarily, bypassing the normal rule that only root may `chown` to another user.
 2. **`CAP_DAC_OVERRIDE`** — Bypass all discretionary read/write/execute permission checks on files and directories (effectively read/write any file regardless of its mode bits).
 3. **`CAP_DAC_READ_SEARCH`** — Bypass read permission checks on files and read/execute (search) checks on directories; weaker than `DAC_OVERRIDE` (read/traverse only, no write).
 4. **`CAP_FOWNER`** — Bypass permission checks that normally require the process UID to match the file owner (e.g. setting file flags, changing mode, updating timestamps on files you don't own).
-5. **`CAP_SETUID`** — Make arbitrary changes to the process's UIDs (`setuid`, `setreuid`, etc.) and forge UID in passed credentials — i.e. become any user.
+5. **`CAP_SETUID`** — Make arbitrary changes to the process's UIDs (`setuid`, `setreuid`, etc.) and forge UID in passed credentials.
 6. **`CAP_SETGID`** — The group equivalent of `CAP_SETUID`: change GIDs arbitrarily and manipulate the supplementary group list.
 7. **`CAP_NET_BIND_SERVICE`** — Bind a socket to a privileged (well-known) TCP/UDP port below 1024, which is otherwise reserved for root.
 8. **`CAP_NET_ADMIN`** — Perform network administration: configure interfaces, routing tables, firewall (netfilter) rules, set interfaces promiscuous, etc.
@@ -169,9 +167,9 @@ In short: `ping` keeps Set UID *off* because a single minimal capability covers 
 
 **Answer.** The answer depends on the crucial difference between **disabling** a capability and **deleting** it, which maps onto the *effective* vs *permitted* capability sets:
 
-- **The process only *disabled* it (removed from the EFFECTIVE set, but kept it in the PERMITTED set).** This is the usual "temporarily lower privilege" pattern: a capability must be in the effective set to be used, but as long as it remains in the permitted set the process is allowed to re-raise it into the effective set at any time. The injected shellcode runs **inside the same process**, with that same permitted set, so it can simply re-enable `cap_dac_override` and then use it. **Yes the attacker can use the capability.** Disabling (clearing the effective bit) is *not* a security boundary against code running in the same process.
+- **The process only *disabled* it (removed from the EFFECTIVE set, but kept it in the PERMITTED set).** This is the usual "temporarily lower privilege" pattern: a capability must be in the effective set to be used, but as long as it remains in the permitted set the process is allowed to re-raise it into the effective set at any time. The injected code runs **inside the same process**, with that same permitted set, so it can simply re-enable `cap_dac_override` and then use it. **Yes the attacker can use the capability.** Disabling (clearing the effective bit) is *not* a security boundary against code running in the same process.
 
-- **The process *deleted* it (dropped it from the PERMITTED set, not just the effective set).** Once a capability is removed from the permitted set, the kernel will **not** let the process add it back to the effective set, the drop is irreversible for the lifetime of that process. The attacker's injected code inherits exactly this reduced permitted set, so there is no capability to re-raise. **No the attacker cannot use the capability.**
+- **The process *deleted* it (dropped it from the PERMITTED set, not just the effective set).** Once a capability is removed from the permitted set, the kernel will **not** let the process add it back to the effective set. The attacker's injected code inherits exactly this reduced permitted set, so there is no capability to re-raise. **No the attacker cannot use the capability.**
 
 **Lesson:** clearing a capability from the *effective* set only protects against accidental misuse by the program's own correct code. It offers no protection against a code-injection/overflow attacker in the same process, because the capability is still *permitted* and can be re-raised. To genuinely defend against such an attacker, a program should **drop the capability from its permitted set** as soon as it no longer needs it (and ideally from the bounding set), making the privilege unrecoverable even by injected code.
 
